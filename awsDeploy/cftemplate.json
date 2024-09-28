@@ -1,0 +1,285 @@
+{
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Parameters": {
+        "VpcId": {
+            "Type": "AWS::EC2::VPC::Id",
+            "Description": "The VPC ID where the ECS Cluster and ALB are deployed.",
+            "Default": "vpc-026a3605217f29788"
+        },
+        "VpcSubnetIds": {
+            "Type": "String",
+            "Description": "The Subnet IDs where the ECS tasks and Load Balancer will be placed.",
+            "Default": "subnet-063f5ebf040c9ac55|subnet-00b8ac669e7b8bc25"
+        },
+        "ClusterName": {
+            "Type": "String",
+            "Default": "app-logs-cluster",
+            "Description": "The name of the opensearch cluster."
+        },
+        "ClusterVersion": {
+            "Type": "String",
+            "Default": "OpenSearch_1.0",
+            "Description": "The version of the opensearch cluster."
+        },
+        "ClusterInstanceType": {
+            "Type": "String",
+            "Default": "t3.small.search",
+            "Description": "The type of the opensearch cluster."
+        },
+        "ClusterDataNodesCount": {
+            "Type": "Number",
+            "Default": "2",
+            "Description": "The number of data nodes of opensearch cluster."
+        },
+        "ClusterDedicatedMasterNode": {
+            "Type": "String",
+            "Default": "false",
+            "Description": "The opensearch cluster should create master node or not."
+        },
+        "ClusterDedicatedMasterNodeType": {
+            "Type": "String",
+            "Default": "t3.small.search",
+            "Description": "The type of the opensearch cluster master node."
+        },
+        "ClusterDedicatedMasterNodeCount": {
+            "Type": "Number",
+            "Default": "3",
+            "Description": "The number of master nodes of opensearch cluster."
+        },
+        "ClusterEbsVolumeSize": {
+            "Type": "Number",
+            "Default": "10",
+            "Description": "Size of the ebs volume of cluster."
+        },
+        "LogRetention": {
+            "Type": "String",
+            "Default": "3",
+            "Description": "Number of days to retain cloudwatch logs."
+        },
+        "LogGroupName": {
+            "Type": "String",
+            "Default": "",
+            "Description": "Log group name for cloudwatch logs."
+        }
+    },
+    "Conditions": {
+        "LogGroupNameProvided": {
+            "Fn::Not": [
+                {
+                    "Fn::Equals": [
+                        {
+                            "Ref": "LogGroupName"
+                        },
+                        ""
+                    ]
+                }
+            ]
+        },
+        "IsDedicatedMasterNode": {
+            "Fn::Equals": [
+                {
+                    "Ref": "ClusterDedicatedMasterNode"
+                },
+                "true"
+            ]
+        }
+    },
+    "Resources": {
+        "OpenSearchSecurityGroup": {
+            "Type": "AWS::EC2::SecurityGroup",
+            "Properties": {
+                "VpcId": {
+                    "Ref": "VpcId"
+                },
+                "GroupDescription": "Security group for OpenSearch domain",
+                "SecurityGroupIngress": [
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": 443,
+                        "ToPort": 443,
+                        "CidrIp": "0.0.0.0/0"
+                    },
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": 80,
+                        "ToPort": 80,
+                        "CidrIp": "0.0.0.0/0"
+                    }
+                ]
+            }
+        },
+        "OpenSearchServiceRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "AssumeRolePolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {
+                                "Service": "es.amazonaws.com"
+                            },
+                            "Action": "sts:AssumeRole"
+                        }
+                    ]
+                },
+                "Policies": [
+                    {
+                        "PolicyName": "CloudWatchLogsPolicy",
+                        "PolicyDocument": {
+                            "Version": "2012-10-17",
+                            "Statement": [
+                                {
+                                    "Effect": "Allow",
+                                    "Action": [
+                                        "logs:CreateLogGroup",
+                                        "logs:CreateLogStream",
+                                        "logs:PutLogEvents"
+                                    ],
+                                    "Resource": "*"
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        },
+        "LG": {
+            "Type": "AWS::Logs::LogGroup",
+            "Properties": {
+                "LogGroupName": {
+                    "Fn::If": [
+                        "LogGroupNameProvided",
+                        {
+                            "Ref": "LogGroupName"
+                        },
+                        {
+                            "Ref": "AWS::StackName"
+                        }
+                    ]
+                },
+                "RetentionInDays": {
+                    "Ref": "LogRetention"
+                }
+            }
+        },
+        "OpenSearchDomain": {
+            "Type": "AWS::OpenSearchService::Domain",
+            "Properties": {
+                "DomainName": {
+                    "Ref": "ClusterName"
+                },
+                "EngineVersion": {
+                    "Ref": "ClusterVersion"
+                },
+                "ClusterConfig": {
+                    "InstanceType": {
+                        "Ref": "ClusterInstanceType"
+                    },
+                    "InstanceCount": {
+                        "Ref": "ClusterDataNodesCount"
+                    },
+                    "DedicatedMasterEnabled": {
+                        "Ref": "ClusterDedicatedMasterNode"
+                    },
+                    "ZoneAwarenessEnabled": true,
+                    "DedicatedMasterType": {
+                        "Fn::If": [
+                            "IsDedicatedMasterNode",
+                            {
+                                "Ref": "ClusterDedicatedMasterNodeType"
+                            },
+                            {
+                                "Ref": "AWS::NoValue"
+                            }
+                        ]
+                    },
+                    "DedicatedMasterCount": {
+                        "Fn::If": [
+                            "IsDedicatedMasterNode",
+                            {
+                                "Ref": "ClusterDedicatedMasterNodeCount"
+                            },
+                            {
+                                "Ref": "AWS::NoValue"
+                            }
+                        ]
+                    }
+                },
+                "EBSOptions": {
+                    "EBSEnabled": true,
+                    "VolumeType": "gp2",
+                    "VolumeSize": {
+                        "Ref": "ClusterEbsVolumeSize"
+                    }
+                },
+                "AccessPolicies": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": "*",
+                            "Action": "es:*",
+                            "Resource": {
+                                "Fn::Join": [
+                                    "",
+                                    [
+                                        "arn.aws.es:",
+                                        {
+                                            "Ref": "AWS::Region"
+                                        },
+                                        ":",
+                                        {
+                                            "Ref": "AWS::AccountId"
+                                        },
+                                        ":domain/",
+                                        {
+                                            "Ref": "ClusterName"
+                                        },
+                                        "/*"
+                                    ]
+                                ]
+                            }
+                        }
+                    ]
+                },
+                "EncryptionAtRestOptions": {
+                    "Enabled": true
+                },
+                "NodeToNodeEncryptionOptions": {
+                    "Enabled": true
+                },
+                "DomainEndpointOptions": {
+                    "EnforceHTTPS": true,
+                    "TLSSecurityPolicy": "Policy-Min-TLS-1-2-2019-07"
+                },
+                "VPCOptions": {
+                    "SubnetIds": {
+                        "Fn::Split": [
+                            "|",
+                            {
+                                "Ref": "VpcSubnetIds"
+                            }
+                        ]
+                    },
+                    "SecurityGroupIds": [
+                        {
+                            "Ref": "OpenSearchSecurityGroup"
+                        }
+                    ]
+                }
+            }
+        }
+    },
+    "Outputs": {
+        "OpenSearchEndpoint": {
+            "Description": "The endpoint of the OpenSearch Domain",
+            "Value": {
+                "Fn::GetAtt": [
+                    "OpenSearchDomain",
+                    "DomainEndpoint"
+                ]
+            }
+        }
+    }
+}
